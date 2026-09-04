@@ -1,54 +1,47 @@
 const fs = require('fs');
-const http = require('http');
 const path = require('path');
-const { execFileSync, spawnSync } = require('child_process');
+const { spawnSync } = require('child_process');
 
 const PROJECT_URL = 'https://github.com/ZzzHe2333/xiaomi_qianbao_VIP';
 
-const ENV_SPECS = [
-  {
-    name: 'ZzzHe2333_xiaomi_qianbao_VIP_suijiyanchi',
-    defaultValue: '30',
-    remarks: '随机延迟',
-  },
-  {
-    name: 'ZzzHe2333_xiaomi_qianbao_VIP_jiangeyanchi',
-    defaultValue: '3',
-    remarks: '多账号间隔延迟（分钟）',
-  },
-];
+const FONT = {
+  X: ['10001', '01010', '00100', '01010', '10001'],
+  I: ['11111', '00100', '00100', '00100', '11111'],
+  A: ['01110', '10001', '11111', '10001', '10001'],
+  O: ['01110', '10001', '10001', '10001', '01110'],
+  M: ['10001', '11011', '10101', '10001', '10001'],
+  Q: ['01110', '10001', '10101', '10010', '01101'],
+  N: ['10001', '11001', '10101', '10011', '10001'],
+  B: ['11110', '10001', '11110', '10001', '11110'],
+};
 
 function formatDate(date = new Date()) {
   const pad = (n) => String(n).padStart(2, '0');
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }
 
-function printBanner(taskName) {
-  const mi = [
-    '■□□□■  ■■■■■',
-    '■■□■■  □□■□□',
-    '■□■□■  □□■□□',
-    '■□□□■  □□■□□',
-    '■□□□■  ■■■■■',
-  ];
-  const vip = [
-    '■□□□■  ■■■■■  ■■■■□',
-    '■□□□■  □□■□□  ■□□□■',
-    '□■□■□  □□■□□  ■■■■□',
-    '□■□■□  □□■□□  ■□□□□',
-    '□□■□□  ■■■■■  ■□□□□',
-  ];
+function renderWord(word) {
+  const letters = [...word].map((char) => FONT[char]);
+  for (let row = 0; row < 5; row += 1) {
+    console.log(
+      letters
+        .map((letter) => letter[row].replace(/1/g, '■').replace(/0/g, '□'))
+        .join('  '),
+    );
+  }
+}
 
-  console.log('\n' + '='.repeat(56));
-  mi.forEach((line) => console.log(line));
+function printBanner(taskName) {
+  console.log('\n' + '='.repeat(92));
+  renderWord('XIAOMI');
   console.log('');
-  vip.forEach((line) => console.log(line));
-  console.log('-'.repeat(56));
+  renderWord('QIANBAO');
+  console.log('-'.repeat(92));
   console.log(`任务名称：${taskName}`);
   console.log(`当前时间：${formatDate()}`);
   console.log(`项目地址：${PROJECT_URL}`);
   console.log('项目说明：本项目永久免费开源，欢迎学习、使用和 Star，请勿付费购买。');
-  console.log('='.repeat(56) + '\n');
+  console.log('='.repeat(92) + '\n');
 }
 
 function qlDir() {
@@ -74,119 +67,9 @@ function repoDirFromEntry(entryDir) {
   throw new Error(`无法定位项目仓库目录，已检查：${candidates.join(', ')}`);
 }
 
-function getInternalToken() {
-  const shell = `
-set -e
-. "${qlDir()}/shell/share.sh"
-. "${qlDir()}/shell/api.sh"
-get_token
-printf '%s' "$__ql_token__"
-`;
-  return execFileSync('bash', ['-lc', shell], {
-    encoding: 'utf8',
-    env: process.env,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  }).trim();
-}
-
-function requestJson(method, requestPath, token, body) {
-  return new Promise((resolve, reject) => {
-    const payload = body == null ? null : JSON.stringify(body);
-    const req = http.request(
-      {
-        host: '127.0.0.1',
-        port: 5600,
-        method,
-        path: requestPath,
-        headers: {
-          Accept: 'application/json',
-          Authorization: `Bearer ${token}`,
-          ...(payload
-            ? {
-                'Content-Type': 'application/json;charset=UTF-8',
-                'Content-Length': Buffer.byteLength(payload),
-              }
-            : {}),
-        },
-      },
-      (res) => {
-        let raw = '';
-        res.setEncoding('utf8');
-        res.on('data', (chunk) => (raw += chunk));
-        res.on('end', () => {
-          try {
-            const parsed = raw ? JSON.parse(raw) : {};
-            resolve(parsed);
-          } catch (error) {
-            reject(new Error(`青龙接口返回非 JSON：${raw.slice(0, 300)}`));
-          }
-        });
-      },
-    );
-    req.on('error', reject);
-    if (payload) req.write(payload);
-    req.end();
-  });
-}
-
-async function ensureEnvironment(spec) {
-  const current = process.env[spec.name];
-  if (typeof current === 'string' && current.trim()) {
-    console.log(`✅ 已读取青龙环境变量：${spec.name}=${current.trim()}`);
-    return current.trim();
-  }
-
-  try {
-    const token = getInternalToken();
-    const query = `/open/envs?searchValue=${encodeURIComponent(spec.name)}`;
-    const found = await requestJson('GET', query, token, null);
-    const items = Array.isArray(found.data) ? found.data : [];
-    const exact = items.find((item) => item && item.name === spec.name);
-
-    if (exact) {
-      if (Number(exact.status || 0) === 1) {
-        process.env[spec.name] = spec.defaultValue;
-        console.log(`ℹ️ 环境变量 ${spec.name} 已存在但被禁用，本次临时使用 ${spec.defaultValue}。`);
-        return spec.defaultValue;
-      }
-      const value = String(exact.value ?? '');
-      process.env[spec.name] = value;
-      console.log(`✅ 已从青龙数据库读取环境变量：${spec.name}=${value || '(空值)'}`);
-      return value;
-    }
-
-    const created = await requestJson(
-      'POST',
-      '/open/envs',
-      token,
-      [
-        {
-          name: spec.name,
-          value: spec.defaultValue,
-          remarks: spec.remarks,
-        },
-      ],
-    );
-
-    if (created && created.code === 200) {
-      process.env[spec.name] = spec.defaultValue;
-      console.log(`✅ 未检测到环境变量，已自动创建：${spec.name}=${spec.defaultValue}，备注=${spec.remarks}`);
-      return spec.defaultValue;
-    }
-
-    console.log(`⚠️ 自动创建环境变量 ${spec.name} 失败，青龙返回：${JSON.stringify(created)}`);
-  } catch (error) {
-    console.log(`⚠️ v2.17.12 环境变量 ${spec.name} 检测/创建失败：${error.message}`);
-  }
-
-  process.env[spec.name] = spec.defaultValue;
-  console.log(`⚠️ 本次运行临时使用默认值：${spec.name}=${spec.defaultValue}`);
-  return spec.defaultValue;
-}
-
 function runPython(repoDir, mode, taskName) {
-  const moduleName = mode === 'login' ? 'xiaomi_login_multi' : 'xiaomi_daily_multi';
-  const bootstrap = [
+  const moduleName = mode === 'login' ? 'xiaomi_login' : 'xiaomi_daily';
+  const lines = [
     'import builtins',
     'import xiaomi_common',
     'orig_notify = xiaomi_common.ql_notify',
@@ -196,9 +79,14 @@ function runPython(repoDir, mode, taskName) {
     `from ${moduleName} import main`,
     `${moduleName} = __import__('${moduleName}')`,
     `if hasattr(${moduleName}, 'ql_notify'): ${moduleName}.ql_notify = _notify`,
-    'xiaomi_common.random_start_delay()',
-    'raise SystemExit(main())',
-  ].join('\n');
+  ];
+
+  // 扫码登录必须立即执行；只有每日任务才执行启动随机延迟。
+  if (mode === 'daily') {
+    lines.push('xiaomi_common.random_start_delay()');
+  }
+  lines.push('raise SystemExit(main())');
+  const bootstrap = lines.join('\n');
 
   const basePythonPath = process.env.PREV_PYTHONPATH || process.env.PYTHONPATH || '';
   const childEnv = {
@@ -208,13 +96,18 @@ function runPython(repoDir, mode, taskName) {
       path.join(qlDir(), 'shell', 'preload'),
       path.join(qlDataDir(), 'config'),
       path.join(qlDataDir(), 'scripts'),
+      repoDir,
       basePythonPath,
     ]
       .filter(Boolean)
       .join(':'),
   };
 
-  console.log(`▶ 准备调用 Python 多账号核心：${moduleName}.py`);
+  console.log(`▶ 准备调用 Python 核心：${moduleName}.py`);
+  if (mode === 'login') {
+    console.log('▶ 扫码登录模式：不执行随机延迟，立即获取二维码。');
+  }
+
   const result = spawnSync('python3', ['-c', bootstrap], {
     cwd: repoDir,
     env: childEnv,
@@ -230,9 +123,6 @@ function runPython(repoDir, mode, taskName) {
 
 async function run({ entryDir, mode, taskName }) {
   printBanner(taskName);
-  for (const spec of ENV_SPECS) {
-    await ensureEnvironment(spec);
-  }
   const repoDir = repoDirFromEntry(entryDir);
   console.log(`项目目录：${repoDir}`);
   runPython(repoDir, mode, taskName);
