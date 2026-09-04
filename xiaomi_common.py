@@ -4,10 +4,112 @@ from __future__ import annotations
 
 import json
 import os
+import random
+import time
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 PROJECT_NAME = "xiaomi_qianbao_VIP"
+PROJECT_URL = "https://github.com/ZzzHe2333/xiaomi_qianbao_VIP"
+RANDOM_DELAY_ENV = "ZzzHe2333_xiaomi_qianbao_VIP_suijiyanchi"
+DEFAULT_RANDOM_DELAY_MINUTES = 30
+MAX_RANDOM_DELAY_MINUTES = 360
+
+
+def print_project_banner(task_name: str = "") -> None:
+    """Print the ZzzHe Xiaomi Wallet project banner to the QingLong task log."""
+    mi_art = (
+        "■□□□■  ■■■■■",
+        "■■□■■  □□■□□",
+        "■□■□■  □□■□□",
+        "■□□□■  □□■□□",
+        "■□□□■  ■■■■■",
+    )
+    vip_art = (
+        "■□□□■  ■■■■■  ■■■■□",
+        "■□□□■  □□■□□  ■□□□■",
+        "□■□■□  □□■□□  ■■■■□",
+        "□■□■□  □□■□□  ■□□□□",
+        "□□■□□  ■■■■■  ■□□□□",
+    )
+
+    print("\n" + "=" * 56)
+    for line in mi_art:
+        print(line)
+    print()
+    for line in vip_art:
+        print(line)
+    print("-" * 56)
+    if task_name:
+        print(f"任务名称：{task_name}")
+    print(f"当前时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"项目地址：{PROJECT_URL}")
+    print("项目说明：本项目永久免费开源，欢迎学习、使用和 Star，请勿付费购买。")
+    print("=" * 56 + "\n")
+
+
+def _read_random_delay_minutes() -> Tuple[int, str]:
+    """Read and validate the user-configured maximum random delay in minutes."""
+    raw = os.getenv(RANDOM_DELAY_ENV)
+    if raw is None or not raw.strip():
+        return DEFAULT_RANDOM_DELAY_MINUTES, "未读取到环境变量，使用默认值"
+
+    value = raw.strip()
+    if not value.isdecimal():
+        return DEFAULT_RANDOM_DELAY_MINUTES, f"环境变量值 {value!r} 不是正整数，使用默认值"
+
+    minutes = int(value)
+    if not 1 <= minutes <= MAX_RANDOM_DELAY_MINUTES:
+        return (
+            DEFAULT_RANDOM_DELAY_MINUTES,
+            f"环境变量值 {minutes} 不在 1-{MAX_RANDOM_DELAY_MINUTES} 范围内，使用默认值",
+        )
+
+    return minutes, "已读取环境变量"
+
+
+def random_start_delay() -> int:
+    """
+    Sleep for a random amount before the daily task starts.
+
+    A is minutes. Actual delay is an integer number of seconds in:
+        0.3 * A * 60 <= delay <= A * 60
+    For integer A, the lower bound is exactly 18 * A seconds.
+    """
+    minutes, reason = _read_random_delay_minutes()
+    min_seconds = 18 * minutes
+    max_seconds = 60 * minutes
+    delay_seconds = random.randint(min_seconds, max_seconds)
+
+    start_at = datetime.now() + timedelta(seconds=delay_seconds)
+    print("【随机延迟】")
+    print(f"环境变量：{RANDOM_DELAY_ENV}")
+    print(f"读取结果：{reason}")
+    print(f"有效 A 值：{minutes} 分钟")
+    print(f"随机范围：{min_seconds}-{max_seconds} 秒")
+    print(f"本次随机睡眠：{delay_seconds} 秒（约 {delay_seconds / 60:.2f} 分钟）")
+    print(f"预计开始时间：{start_at.strftime('%Y-%m-%d %H:%M:%S')}")
+
+    deadline = time.monotonic() + delay_seconds
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+
+        time.sleep(min(30.0, remaining))
+        remaining_after_sleep = max(0, int(round(deadline - time.monotonic())))
+        now = datetime.now()
+        if remaining_after_sleep > 0:
+            print(
+                f"⏳ 当前时间：{now.strftime('%Y-%m-%d %H:%M:%S')} | "
+                f"预计开始：{start_at.strftime('%Y-%m-%d %H:%M:%S')} | "
+                f"剩余约 {remaining_after_sleep} 秒",
+                flush=True,
+            )
+
+    print(f"▶ 随机延迟结束，开始执行：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    return delay_seconds
 
 
 def _default_config_path() -> Path:
