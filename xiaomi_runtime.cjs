@@ -4,9 +4,19 @@ const path = require('path');
 const { execFileSync, spawnSync } = require('child_process');
 
 const PROJECT_URL = 'https://github.com/ZzzHe2333/xiaomi_qianbao_VIP';
-const RANDOM_DELAY_ENV = 'ZzzHe2333_xiaomi_qianbao_VIP_suijiyanchi';
-const DEFAULT_DELAY = '30';
-const DEFAULT_REMARK = '随机延迟';
+
+const ENV_SPECS = [
+  {
+    name: 'ZzzHe2333_xiaomi_qianbao_VIP_suijiyanchi',
+    defaultValue: '30',
+    remarks: '随机延迟',
+  },
+  {
+    name: 'ZzzHe2333_xiaomi_qianbao_VIP_jiangeyanchi',
+    defaultValue: '3',
+    remarks: '多账号间隔延迟（分钟）',
+  },
+];
 
 function formatDate(date = new Date()) {
   const pad = (n) => String(n).padStart(2, '0');
@@ -119,29 +129,29 @@ function requestJson(method, requestPath, token, body) {
   });
 }
 
-async function ensureRandomDelayEnv() {
-  const current = process.env[RANDOM_DELAY_ENV];
+async function ensureEnvironment(spec) {
+  const current = process.env[spec.name];
   if (typeof current === 'string' && current.trim()) {
-    console.log(`✅ 已读取青龙环境变量：${RANDOM_DELAY_ENV}=${current.trim()}`);
+    console.log(`✅ 已读取青龙环境变量：${spec.name}=${current.trim()}`);
     return current.trim();
   }
 
   try {
     const token = getInternalToken();
-    const query = `/open/envs?searchValue=${encodeURIComponent(RANDOM_DELAY_ENV)}`;
+    const query = `/open/envs?searchValue=${encodeURIComponent(spec.name)}`;
     const found = await requestJson('GET', query, token, null);
     const items = Array.isArray(found.data) ? found.data : [];
-    const exact = items.find((item) => item && item.name === RANDOM_DELAY_ENV);
+    const exact = items.find((item) => item && item.name === spec.name);
 
     if (exact) {
       if (Number(exact.status || 0) === 1) {
-        process.env[RANDOM_DELAY_ENV] = DEFAULT_DELAY;
-        console.log(`ℹ️ 环境变量 ${RANDOM_DELAY_ENV} 已存在但被禁用，本次临时使用 ${DEFAULT_DELAY}。`);
-        return DEFAULT_DELAY;
+        process.env[spec.name] = spec.defaultValue;
+        console.log(`ℹ️ 环境变量 ${spec.name} 已存在但被禁用，本次临时使用 ${spec.defaultValue}。`);
+        return spec.defaultValue;
       }
       const value = String(exact.value ?? '');
-      process.env[RANDOM_DELAY_ENV] = value;
-      console.log(`✅ 已从青龙数据库读取环境变量：${RANDOM_DELAY_ENV}=${value || '(空值)'}`);
+      process.env[spec.name] = value;
+      console.log(`✅ 已从青龙数据库读取环境变量：${spec.name}=${value || '(空值)'}`);
       return value;
     }
 
@@ -151,31 +161,31 @@ async function ensureRandomDelayEnv() {
       token,
       [
         {
-          name: RANDOM_DELAY_ENV,
-          value: DEFAULT_DELAY,
-          remarks: DEFAULT_REMARK,
+          name: spec.name,
+          value: spec.defaultValue,
+          remarks: spec.remarks,
         },
       ],
     );
 
     if (created && created.code === 200) {
-      process.env[RANDOM_DELAY_ENV] = DEFAULT_DELAY;
-      console.log(`✅ 未检测到环境变量，已自动创建：${RANDOM_DELAY_ENV}=${DEFAULT_DELAY}，备注=${DEFAULT_REMARK}`);
-      return DEFAULT_DELAY;
+      process.env[spec.name] = spec.defaultValue;
+      console.log(`✅ 未检测到环境变量，已自动创建：${spec.name}=${spec.defaultValue}，备注=${spec.remarks}`);
+      return spec.defaultValue;
     }
 
-    console.log(`⚠️ 自动创建环境变量失败，青龙返回：${JSON.stringify(created)}`);
+    console.log(`⚠️ 自动创建环境变量 ${spec.name} 失败，青龙返回：${JSON.stringify(created)}`);
   } catch (error) {
-    console.log(`⚠️ v2.17.12 环境变量检测/创建失败：${error.message}`);
+    console.log(`⚠️ v2.17.12 环境变量 ${spec.name} 检测/创建失败：${error.message}`);
   }
 
-  process.env[RANDOM_DELAY_ENV] = DEFAULT_DELAY;
-  console.log(`⚠️ 本次运行临时使用默认值 ${DEFAULT_DELAY} 分钟。`);
-  return DEFAULT_DELAY;
+  process.env[spec.name] = spec.defaultValue;
+  console.log(`⚠️ 本次运行临时使用默认值：${spec.name}=${spec.defaultValue}`);
+  return spec.defaultValue;
 }
 
 function runPython(repoDir, mode, taskName) {
-  const moduleName = mode === 'login' ? 'xiaomi_login' : 'xiaomi_daily';
+  const moduleName = mode === 'login' ? 'xiaomi_login_multi' : 'xiaomi_daily_multi';
   const bootstrap = [
     'import builtins',
     'import xiaomi_common',
@@ -204,7 +214,7 @@ function runPython(repoDir, mode, taskName) {
       .join(':'),
   };
 
-  console.log(`▶ 准备调用 Python 核心：${moduleName}.py`);
+  console.log(`▶ 准备调用 Python 多账号核心：${moduleName}.py`);
   const result = spawnSync('python3', ['-c', bootstrap], {
     cwd: repoDir,
     env: childEnv,
@@ -220,7 +230,9 @@ function runPython(repoDir, mode, taskName) {
 
 async function run({ entryDir, mode, taskName }) {
   printBanner(taskName);
-  await ensureRandomDelayEnv();
+  for (const spec of ENV_SPECS) {
+    await ensureEnvironment(spec);
+  }
   const repoDir = repoDirFromEntry(entryDir);
   console.log(`项目目录：${repoDir}`);
   runPython(repoDir, mode, taskName);
