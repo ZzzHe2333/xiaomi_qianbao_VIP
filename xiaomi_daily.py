@@ -1,13 +1,11 @@
 """
-小米钱包每日任务
+小米钱包每日任务核心逻辑。
 
-name: 小米钱包每日任务
-cron: 37 8 * * *
+真正的青龙入口为 ZzzHe_xiaomi_wallet_daily.js。
 """
 
 from __future__ import annotations
 
-import os
 import random
 import subprocess
 import sys
@@ -30,7 +28,12 @@ _ensure_dependencies()
 
 import requests
 
-from xiaomi_common import CONFIG_PATH, load_accounts, ql_notify, save_accounts
+from xiaomi_common import (
+    account_interval_delay,
+    load_qinglong_cookie_accounts,
+    migrate_legacy_accounts_if_needed,
+    ql_notify,
+)
 
 API_HOST = "m.jr.airstarfinance.net"
 ACTIVITY_CODE = "2211-videoWelfare"
@@ -277,7 +280,6 @@ def make_report(alias: str, user_id: str, task: XiaomiWalletTask) -> str:
             lines.append(f"- {record.get('createTime', '未知时间')} {value_text}")
     else:
         lines.append("今日暂无新增奖励记录")
-
     if task.error_info:
         lines.append(f"异常：{task.error_info}")
     return "\n".join(lines)
@@ -290,15 +292,13 @@ def process_account(data: Dict[str, Any]) -> tuple[str, bool]:
 
     print(f"\n>>>>>>>>>> 账号 {alias} <<<<<<<<<<")
     if not user_id or not pass_token:
-        report = f"账号：{alias}\n异常：配置缺少 userId/passToken，请重新扫码登录。"
-        return report, False
+        return f"账号：{alias}\n异常：ck 环境变量缺少 userId/passToken，请重新扫码登录。", False
 
     cookie = get_session_cookie(pass_token, user_id)
     task = XiaomiWalletTask(ApiRequest(cookie or ""))
     if not cookie:
-        task.error_info = "长效凭证可能已失效，请运行“小米钱包扫码登录”任务刷新凭证。"
-        report = make_report(alias, user_id, task)
-        return report, False
+        task.error_info = "长效凭证可能已失效，请重新运行扫码登录任务刷新该小米账号。"
+        return make_report(alias, user_id, task), False
 
     print("  - 临时会话 Cookie 获取成功。")
     try:
@@ -306,32 +306,31 @@ def process_account(data: Dict[str, Any]) -> tuple[str, bool]:
     except Exception as exc:
         task.error_info = f"执行异常：{exc}"
         ok = False
-
-    report = make_report(alias, user_id, task)
-    data["log"] = report
-    data["lastRunAt"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    return report, ok
+    return make_report(alias, user_id, task), ok
 
 
 def main() -> int:
     print(f"======= 小米钱包每日任务 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} =======")
-    print(f"配置文件：{CONFIG_PATH}")
-    try:
-        accounts = load_accounts()
-    except Exception as exc:
-        message = f"读取配置失败：{exc}"
-        print("❌ " + message)
-        ql_notify("小米钱包每日任务失败", message, globals().get("QLAPI"))
-        return 1
+
+    accounts = load_qinglong_cookie_accounts()
+    if not accounts:
+        migrate_legacy_accounts_if_needed()
+        accounts = load_qinglong_cookie_accounts()
 
     if not accounts:
-        message = "尚未添加账号，请先运行“小米钱包扫码登录”任务。"
+        message = "尚未检测到 ck1/ck2...，请先运行 ZzzHe_小米钱包扫码登录。"
         print("ℹ️ " + message)
         ql_notify("小米钱包未登录", message, globals().get("QLAPI"))
         return 1
 
+    print(f"检测到 {len(accounts)} 个账号，将严格串行执行。")
+    for index, account in enumerate(accounts, start=1):
+        env_name = account.get("data", {}).get("envName", "")
+        print(f"  {index}. {env_name}")
+
     reports: List[str] = []
     success_count = 0
+
     for index, account in enumerate(accounts):
         data = account.setdefault("data", {})
         report, ok = process_account(data)
@@ -339,14 +338,10 @@ def main() -> int:
         reports.append(report)
         success_count += int(ok)
 
+        # 严格串行：只有当前账号 process_account 完整返回后，才可能等待并启动下一个账号。
         if index < len(accounts) - 1:
-            max_delay = max(0, int(os.getenv("XIAOMI_WALLET_ACCOUNT_DELAY_MAX", "15")))
-            delay = random.randint(0, max_delay) if max_delay else 0
-            if delay:
-                print(f"账号间随机等待 {delay} 秒...")
-                time.sleep(delay)
-
-    save_accounts(accounts)
+            next_alias = str(accounts[index + 1].get("data", {}).get("us", f"ck{index + 2}"))
+            account_interval_delay(next_alias)
 
     summary = (
         f"执行时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
@@ -355,8 +350,7 @@ def main() -> int:
     )
     title = "小米钱包每日任务" if success_count == len(accounts) else "小米钱包每日任务（有异常）"
     ql_notify(title, summary, globals().get("QLAPI"))
-
-    print("\n======= 执行完毕 =======")
+    print("\n======= 全部账号执行完毕 =======")
     return 0 if success_count == len(accounts) else 2
 
 
