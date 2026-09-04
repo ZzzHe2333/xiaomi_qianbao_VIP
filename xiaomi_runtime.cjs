@@ -197,6 +197,7 @@ function runPython(repoDir, mode, taskName) {
     PYTHONPATH: [
       path.join(qlDir(), 'shell', 'preload'),
       path.join(qlDataDir(), 'config'),
+      path.join(qlDataDir(), 'scripts'),
       basePythonPath,
     ]
       .filter(Boolean)
