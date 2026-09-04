@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import builtins
 import json
 import os
 import random
@@ -13,8 +14,14 @@ from typing import Any, Dict, List, Optional, Tuple
 PROJECT_NAME = "xiaomi_qianbao_VIP"
 PROJECT_URL = "https://github.com/ZzzHe2333/xiaomi_qianbao_VIP"
 RANDOM_DELAY_ENV = "ZzzHe2333_xiaomi_qianbao_VIP_suijiyanchi"
+RANDOM_DELAY_REMARKS = "随机延迟"
 DEFAULT_RANDOM_DELAY_MINUTES = 30
 MAX_RANDOM_DELAY_MINUTES = 360
+
+
+def _get_qlapi() -> Optional[Any]:
+    """Return QingLong's built-in QLAPI object when running inside QingLong."""
+    return getattr(builtins, "QLAPI", None)
 
 
 def print_project_banner(task_name: str = "") -> None:
@@ -49,6 +56,92 @@ def print_project_banner(task_name: str = "") -> None:
     print("=" * 56 + "\n")
 
 
+def ensure_qinglong_random_delay_env() -> str:
+    """
+    Ensure the QingLong environment variable used for random delay exists.
+
+    If it does not exist in QingLong, create it with:
+      value   = "30"
+      remarks = "随机延迟"
+
+    The newly-created value is also injected into os.environ so the current
+    process can use it immediately without waiting for the next task run.
+    """
+    process_value = os.getenv(RANDOM_DELAY_ENV)
+    qlapi = _get_qlapi()
+
+    if qlapi is not None and hasattr(qlapi, "getEnvs") and hasattr(qlapi, "createEnv"):
+        try:
+            response = qlapi.getEnvs({"searchValue": RANDOM_DELAY_ENV})
+            items = response.get("data", []) if isinstance(response, dict) else []
+            exact = next(
+                (
+                    item
+                    for item in items
+                    if str(item.get("name", "")) == RANDOM_DELAY_ENV
+                ),
+                None,
+            )
+
+            if exact is not None:
+                status = int(exact.get("status", 0) or 0)
+                db_value = str(exact.get("value", ""))
+                remarks = str(exact.get("remarks", "") or "")
+
+                if status == 1:
+                    os.environ[RANDOM_DELAY_ENV] = str(DEFAULT_RANDOM_DELAY_MINUTES)
+                    print(
+                        f"ℹ️ 青龙环境变量 {RANDOM_DELAY_ENV} 已存在但处于禁用状态；"
+                        f"本次运行临时使用默认值 {DEFAULT_RANDOM_DELAY_MINUTES}，不会重复创建或自动启用。"
+                    )
+                    return str(DEFAULT_RANDOM_DELAY_MINUTES)
+
+                if process_value is None or not process_value.strip():
+                    os.environ[RANDOM_DELAY_ENV] = db_value
+                    process_value = db_value
+
+                remark_text = remarks or "无备注"
+                print(
+                    f"✅ 已检测到青龙环境变量：{RANDOM_DELAY_ENV}="
+                    f"{process_value if process_value is not None else db_value}（备注：{remark_text}）"
+                )
+                return process_value if process_value is not None else db_value
+
+            create_response = qlapi.createEnv(
+                {
+                    "envs": [
+                        {
+                            "name": RANDOM_DELAY_ENV,
+                            "value": str(DEFAULT_RANDOM_DELAY_MINUTES),
+                            "remarks": RANDOM_DELAY_REMARKS,
+                        }
+                    ]
+                }
+            )
+            if isinstance(create_response, dict) and create_response.get("code") == 200:
+                os.environ[RANDOM_DELAY_ENV] = str(DEFAULT_RANDOM_DELAY_MINUTES)
+                print(
+                    f"✅ 未检测到青龙环境变量 {RANDOM_DELAY_ENV}，已自动创建："
+                    f"值={DEFAULT_RANDOM_DELAY_MINUTES}，备注={RANDOM_DELAY_REMARKS}。"
+                )
+                return str(DEFAULT_RANDOM_DELAY_MINUTES)
+
+            print(f"⚠️ 自动创建青龙环境变量失败，接口返回：{create_response}")
+        except Exception as exc:
+            print(f"⚠️ 检测/创建青龙环境变量时发生异常：{exc}")
+
+    # Non-QingLong/older-QingLong fallback: keep the current run usable.
+    if process_value is None or not process_value.strip():
+        os.environ[RANDOM_DELAY_ENV] = str(DEFAULT_RANDOM_DELAY_MINUTES)
+        print(
+            f"⚠️ 当前环境无法通过 QLAPI 持久化创建 {RANDOM_DELAY_ENV}；"
+            f"本次运行临时使用默认值 {DEFAULT_RANDOM_DELAY_MINUTES}。"
+        )
+        return str(DEFAULT_RANDOM_DELAY_MINUTES)
+
+    return process_value
+
+
 def _read_random_delay_minutes() -> Tuple[int, str]:
     """Read and validate the user-configured maximum random delay in minutes."""
     raw = os.getenv(RANDOM_DELAY_ENV)
@@ -71,12 +164,13 @@ def _read_random_delay_minutes() -> Tuple[int, str]:
 
 def random_start_delay() -> int:
     """
-    Sleep for a random amount before the daily task starts.
+    Sleep for a random amount before the task starts.
 
     A is minutes. Actual delay is an integer number of seconds in:
         0.3 * A * 60 <= delay <= A * 60
     For integer A, the lower bound is exactly 18 * A seconds.
     """
+    ensure_qinglong_random_delay_env()
     minutes, reason = _read_random_delay_minutes()
     min_seconds = 18 * minutes
     max_seconds = 60 * minutes
@@ -205,6 +299,9 @@ def ql_notify(title: str, content: str, qlapi: Optional[Any] = None) -> bool:
     enabled = os.getenv("XIAOMI_WALLET_NOTIFY", "1").strip().lower()
     if enabled in {"0", "false", "off", "no"}:
         return False
+
+    if qlapi is None:
+        qlapi = _get_qlapi()
 
     if qlapi is not None and hasattr(qlapi, "notify"):
         try:
