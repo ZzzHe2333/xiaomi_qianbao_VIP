@@ -1,12 +1,4 @@
-"""
-小米钱包扫码登录（手动任务）
-
-name: 小米钱包扫码登录
-cron: 0 0 29 2 *
-
-说明：使用合法 Cron 以兼容青龙订阅任务解析。
-该任务主要用于手动扫码登录/刷新凭证；默认仅在闰年 2 月 29 日自动触发。
-"""
+"""小米钱包扫码登录核心逻辑。扫码任务不执行随机延迟。"""
 
 from __future__ import annotations
 
@@ -28,7 +20,6 @@ def _ensure_dependencies() -> None:
         import qrcode  # noqa: F401
     except ImportError:
         missing.append("qrcode>=7.4.2")
-
     if missing:
         print("📦 首次运行，正在安装缺失依赖: " + ", ".join(missing))
         subprocess.check_call(
@@ -41,7 +32,7 @@ _ensure_dependencies()
 import qrcode
 import requests
 
-from xiaomi_common import CONFIG_PATH, get_default_alias, ql_notify, upsert_account
+from xiaomi_common import ql_notify, save_qinglong_cookie_account
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -84,7 +75,6 @@ def print_qr(qr_url: str) -> None:
     qr.add_data(qr_url)
     qr.make(fit=True)
     matrix = qr.get_matrix()
-
     print("\n📱 请使用小米手机/小米账号支持的扫码入口扫描下方二维码：\n")
     for row in matrix:
         print("".join("██" if cell else "  " for cell in row))
@@ -133,19 +123,17 @@ def poll_login(lp_url: str, timeout: int) -> Optional[Dict[str, str]]:
         except Exception as exc:
             print(f"⚠️ 查询扫码状态失败: {exc}，3 秒后重试。")
             time.sleep(3)
-
     return None
 
 
 def main() -> int:
-    alias = get_default_alias()
     print("======= 小米钱包扫码登录 =======")
-    print(f"账号别名: {alias}")
-    print(f"凭证保存位置: {CONFIG_PATH}")
-    print("提示：多账号时可在青龙环境变量设置 XIAOMI_WALLET_ALIAS 后再运行本任务。")
+    print("扫码登录任务不执行随机延迟，运行后直接生成二维码。")
+    print("新账号会自动保存为 ck1 / ck2 / ck3 ...；重复扫码同一账号会更新原 ck。")
 
     login_data = get_login_qr()
     if not login_data or login_data.get("code") != 0:
+        print(f"❌ 获取扫码参数失败：{login_data}")
         return 1
 
     qr_url = login_data.get("qr")
@@ -160,22 +148,26 @@ def main() -> int:
         print("❌ 登录失败或二维码已过期，请重新运行本任务。")
         return 1
 
-    account_data = {
-        "us": alias,
-        **result,
-        "updatedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-    }
-    upsert_account(account_data)
+    try:
+        env_name, created_new = save_qinglong_cookie_account(
+            {
+                **result,
+                "updatedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            }
+        )
+    except Exception as exc:
+        print(f"❌ 登录已成功，但写入青龙 ck 环境变量失败：{exc}")
+        return 1
 
-    print("✅ 登录成功，长效凭证已写入青龙持久化配置目录。")
+    action = "新增" if created_new else "更新"
+    print(f"✅ 登录成功，已{action}青龙环境变量：{env_name}")
     print(f"小米 User ID: {result['userId']}")
     print("passToken/securityToken 不会输出到日志。")
 
-    qlapi = globals().get("QLAPI")
     ql_notify(
         "小米钱包登录成功",
-        f"账号别名：{alias}\n小米ID：{result['userId']}\n凭证已保存，可执行每日任务。",
-        qlapi,
+        f"{action}账号：{env_name}\n小米ID：{result['userId']}\n凭证已保存，可执行每日任务。",
+        globals().get("QLAPI"),
     )
     return 0
 
